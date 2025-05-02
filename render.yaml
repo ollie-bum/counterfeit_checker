@@ -9,7 +9,7 @@ services:
       source venv/bin/activate
       pip install --upgrade pip
       pip install -r requirements.txt
-    startCommand: venv/bin/streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+    startCommand: bash -c "source venv/bin/activate && streamlit run app.py --server.port $PORT --server.address 0.0.0.0"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
