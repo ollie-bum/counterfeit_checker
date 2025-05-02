@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: counterfeit-risk-checker
+    env: python
+    plan: free  # Use 'starter' or 'pro' for production
+    region: oregon  # Choose your preferred region
+    buildCommand: |
+      python -m venv venv
+      source venv/bin/activate
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: OPENAI_API_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: ANTHROPIC_API_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: AI_PROVIDER
+        value: openai  # or 'anthropic' if preferred
+    autoDeploy: true
