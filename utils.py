@@ -1,16 +1,18 @@
 import os
 import base64
-from dotenv import load_dotenv
 import logging
 import json
 from lxml import html, etree
 
-# Load environment variables
-load_dotenv()
+# Only load .env if NOT running on Render
+if os.getenv("RENDER") != "true":
+    from dotenv import load_dotenv
+    load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
 
 # Determine which AI provider to use based on environment variable
 AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").lower()  # Default to OpenAI if not specified
@@ -76,6 +78,11 @@ def call_openai(prompt):
         
         # Initialize OpenAI client
         api_key = os.getenv("OPENAI_API_KEY")
+
+        logger.info(f"OPENAI_API_KEY length: {len(api_key) if api_key else 'None'}")
+        logger.info(f"OPENAI_API_KEY prefix: {api_key[:8] if api_key else 'None'}")
+
+
         if not api_key:
             error_msg = "OpenAI API key not found. Please set the OPENAI_API_KEY environment variable."
             logger.error(error_msg)
