@@ -1,8 +1,11 @@
 import os
 import base64
+from dotenv import load_dotenv
 import logging
 import json
 from lxml import html, etree
+import requests
+import google.generativeai as genai
 
 # Only load .env if NOT running on Render
 if os.getenv("RENDER") != "true":
@@ -13,9 +16,15 @@ if os.getenv("RENDER") != "true":
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# OpenAI initialization
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Gemini initialization
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
 
 # Determine which AI provider to use based on environment variable
-AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").lower()  # Default to OpenAI if not specified
+AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").lower()  # Default to OpenAI if not specified
 
 def format_output(html_content):
     """Ensure HTML content is properly formatted for Streamlit display"""
@@ -31,14 +40,20 @@ def call_ai_model(prompt):
     Returns:
         str: The response from the AI model
     """
-    if AI_PROVIDER == "openai":
-        raw_result = call_openai(prompt)
-    elif AI_PROVIDER == "anthropic":
-        raw_result = call_anthropic(prompt)
+    # Try primary provider first
+    if AI_PROVIDER == "gemini":
+        raw_result = call_gemini(prompt)
+        # If Gemini fails, fallback to OpenAI
+        if raw_result is None:
+            logger.info("Gemini API call failed, falling back to OpenAI")
+            raw_result = call_openai(prompt)
     else:
-        error_msg = f"Unknown AI provider: {AI_PROVIDER}. Please set AI_PROVIDER to 'openai' or 'anthropic'"
-        logger.error(error_msg)
-        return f"<div class='error'>{error_msg}</div>"
+        # OpenAI as primary
+        raw_result = call_openai(prompt)
+        # If OpenAI fails, fallback to Gemini
+        if raw_result is None:
+            logger.info("OpenAI API call failed, falling back to Gemini")
+            raw_result = call_gemini(prompt)
     
     # Process the raw result to ensure HTML is correctly formatted
     try:
@@ -61,6 +76,67 @@ def call_ai_model(prompt):
     except Exception as e:
         logger.error(f"Error processing HTML result: {str(e)}")
         return raw_result  # Return the original result if processing fails
+
+def call_gemini(prompt):
+    """
+    Call the Gemini API with the given prompt.
+    
+    Args:
+        prompt (str): The prompt to send to the Gemini API
+        
+    Returns:
+        str: The response from the Gemini API
+    """
+    try:
+        # Configure the model
+        model = genai.GenerativeModel('gemini-2.5-pro-preview-03-25')
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
+        
+        # Return the content of the response
+        return response.text
+        
+    except Exception as e:
+        logger.error(f"Error calling Gemini API: {str(e)}")
+        # Return None to trigger fallback
+        return None
+
+def call_gemini_vision(prompt, image_data_list):
+    """
+    Call Gemini with image data and prompt.
+    
+    Args:
+        prompt (str): The prompt to send to Gemini
+        image_data_list (list): List of base64-encoded image data
+        
+    Returns:
+        str: The response from Gemini
+    """
+    try:
+        # Configure the model for vision tasks
+        model = genai.GenerativeModel('gemini-2.5-pro-preview-03-25')
+        
+        # Prepare content parts
+        content_parts = [prompt]
+        
+        # Add image parts
+        for img_data in image_data_list:
+            content_parts.append({
+                "mime_type": "image/jpeg",
+                "data": img_data
+            })
+        
+        # Call Gemini API with multimodal content
+        response = model.generate_content(content_parts)
+        
+        # Return the content of the response
+        return response.text
+        
+    except Exception as e:
+        logger.error(f"Error calling Gemini Vision API: {str(e)}")
+        # Return None to trigger fallback
+        return None
 
 def call_openai(prompt):
     """
@@ -215,6 +291,36 @@ def call_vision_model(prompt, image_base64):
         error_msg = f"Error calling vision model: {str(e)}"
         logger.error(error_msg)
         return f"<div class='error'>{error_msg}</div>"
+    
+def call_openai_vision_multi(content_array):
+    """
+    Call OpenAI with multiple images.
+    This is a wrapper for your existing OpenAI vision code.
+    """
+    # Copy your existing OpenAI vision code here
+    from openai import OpenAI
+    
+    # Initialize OpenAI client
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    
+    # Call OpenAI API with GPT-4o
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a luxury fashion authentication expert."
+            },
+            {
+                "role": "user",
+                "content": content_array
+            }
+        ],
+        temperature=0.4,
+        max_tokens=1000
+    )
+    
+    return response.choices[0].message.content
 
 def call_vision_model_multi(content_array):
     """
@@ -228,50 +334,45 @@ def call_vision_model_multi(content_array):
         str: The response from the vision model
     """
     try:
-        from openai import OpenAI
+        # Extract text prompt and images from content_array
+        text_prompt = ""
+        image_data_list = []
         
-        # Initialize OpenAI client with only the API key
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            error_msg = "OpenAI API key not found. Please set the OPENAI_API_KEY environment variable."
-            logger.error(error_msg)
-            return f"<div class='error'>{error_msg}</div>"
+        for item in content_array:
+            if item.get("type") == "text":
+                text_prompt = item.get("text", "")
+            elif item.get("type") == "image_url":
+                # Extract base64 data from image URL
+                img_url = item.get("image_url", {}).get("url", "")
+                if img_url.startswith("data:image/jpeg;base64,"):
+                    img_data = img_url.split("base64,")[1]
+                    image_data_list.append(img_data)
+        
+        # Try primary provider first
+        if AI_PROVIDER == "gemini":
+            result = call_gemini_vision(text_prompt, image_data_list)
             
-        # Create client with only the required API key
-        client = OpenAI(api_key=api_key)
+            # Fallback to OpenAI if Gemini fails
+            if result is None:
+                logger.info("Gemini Vision API call failed, falling back to OpenAI")
+                result = call_openai_vision_multi(content_array)
+        else:
+            # OpenAI as primary
+            result = call_openai_vision_multi(content_array)
+            
+            # Fallback to Gemini if OpenAI fails
+            if result is None:
+                logger.info("OpenAI Vision API call failed, falling back to Gemini")
+                result = call_gemini_vision(text_prompt, image_data_list)
         
-        # Format the messages with multiple images
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a luxury fashion authentication expert specializing in visual analysis. Format your response in clean, properly nested HTML."
-            },
-            {
-                "role": "user",
-                "content": content_array
-            }
-        ]
-        
-        # Call OpenAI API with GPT-4o
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.4,
-            max_tokens=1000
-        )
-        
-        # Access the response content
-        raw_result = response.choices[0].message.content
-        
-        # Process the result to fix HTML rendering issues
-        processed_result = process_html_result(raw_result)
+        # Process the result for HTML formatting
+        processed_result = process_html_result(result)
         
         return processed_result
         
     except Exception as e:
-        error_msg = f"Error calling vision model: {str(e)}"
-        logger.error(error_msg)
-        return f"<div class='error'>{error_msg}</div>"
+        logger.error(f"Error calling vision model: {str(e)}")
+        return f"<div class='error'>Error analyzing images: {str(e)}</div>"
 
 def process_html_result(html_content):
     """
